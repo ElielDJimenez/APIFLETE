@@ -16,14 +16,15 @@ def construir_url(origen, destino, contenedor):
 
 def consultar_flete_contenedor(origen, destino, contenedor):
     url = construir_url(origen, destino, contenedor)
-    logging.info(f"Consultando: {url}")
     r = requests.get(url, timeout=10)
     r.raise_for_status()
     json = r.json()
 
     resultados = []
-    if "mode" in json.get("response", {}).get("estimatedFreightRates", {}):
-        modo = json["response"]["estimatedFreightRates"]["mode"]
+    estructura = json.get("response", {}).get("estimatedFreightRates")
+
+    if isinstance(estructura, dict) and "mode" in estructura:
+        modo = estructura["mode"]
         resultados.append({
             "contenedor": contenedor,
             "min": modo["price"]["min"]["moneyAmount"]["amount"],
@@ -31,8 +32,8 @@ def consultar_flete_contenedor(origen, destino, contenedor):
             "transit_min": modo["transitTimes"]["min"],
             "transit_max": modo["transitTimes"]["max"]
         })
-    elif isinstance(json.get("response", {}).get("estimatedFreightRates"), list):
-        for modo in json["response"]["estimatedFreightRates"]:
+    elif isinstance(estructura, list):
+        for modo in estructura:
             resultados.append({
                 "contenedor": contenedor,
                 "min": modo["price"]["min"]["moneyAmount"]["amount"],
@@ -40,35 +41,26 @@ def consultar_flete_contenedor(origen, destino, contenedor):
                 "transit_min": modo["transitTimes"]["min"],
                 "transit_max": modo["transitTimes"]["max"]
             })
-    return resultados
 
-@app.route("/")
-def home():
-    return jsonify({"mensaje": "Servicio Freightos activo"}), 200
+    return resultados
 
 @app.route("/flete", methods=["GET"])
 def obtener_fletes():
-    try:
-        origen = request.args.get("origen", "CNCAN")
-        destino = request.args.get("destino", "DOCAU")
-        tipos = ["container20", "container40", "container40hc", "container45hc"]
+    origen = request.args.get("origen", "CNCAN")
+    destino = request.args.get("destino", "DOCAU")
+    tipos = ["container20", "container40", "container40hc", "container45hc"]
 
-        fletes = []
-        for tipo in tipos:
-            try:
-                fletes += consultar_flete_contenedor(origen, destino, tipo)
-            except Exception as e:
-                logging.warning(f"No se pudo obtener flete para {tipo}: {e}")
+    fletes = []
+    for tipo in tipos:
+        try:
+            resultados = consultar_flete_contenedor(origen, destino, tipo)
+            if resultados:
+                fletes.extend(resultados)
+        except Exception as e:
+            logging.warning(f"No se pudo obtener flete para {tipo}: {e}")
 
-        return jsonify({
-            "origen": origen,
-            "destino": destino,
-            "fletes": fletes
-        })
-
-    except Exception as e:
-        logging.error(f"Error general: {e}")
-        return jsonify({"error": str(e)}), 500
-
-if __name__ == "__main__":
-    app.run(debug=False, host="0.0.0.0", port=10000)
+    return jsonify({
+        "origen": origen,
+        "destino": destino,
+        "fletes": fletes
+    })
