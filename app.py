@@ -1,45 +1,56 @@
-from flask import Flask, jsonify, request
+from flask import Flask, request, jsonify
 import requests
+import logging
 
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
 
-@app.route("/freight", methods=["GET"])
+@app.route("/")
+def home():
+    return jsonify({"mensaje": "API de fletes activa"}), 200
+
+@app.route("/flete", methods=["GET"])
 def obtener_flete():
-    origen = request.args.get("origen", "CNCAN")
-    destino = request.args.get("destino", "DOCAU")
-    contenedor = request.args.get("contenedor", "container40")
-
-    url = f"https://ship.freightos.com/api/shippingCalculator?loadtype={contenedor}&weight=200&width=50&length=50&height=50&origin={origen}&destination={destino}&quantity=1"
-
     try:
-        r = requests.get(url)
-        r.raise_for_status()
-        data = r.json()
+        origen = request.args.get("origen")
+        destino = request.args.get("destino")
+        contenedor = request.args.get("contenedor")  # container20, container40, boxes
 
-        rates = data.get("response", {}).get("estimatedFreightRates", [])
-        if isinstance(rates, list) and len(rates) > 0:
-            rate = rates[0]
+        if not origen or not destino or not contenedor:
+            return jsonify({"error": "Parámetros requeridos: origen, destino y contenedor"}), 400
+
+        url = f"https://ship.freightos.com/api/shippingCalculator?loadtype={contenedor}&weight=200&width=50&length=50&height=50&origin={origen}&destination={destino}&quantity=1"
+        logging.info(f"Llamando a URL: {url}")
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+
+        data = response.json()
+        flete = {}
+
+        if "mode" in data.get("response", {}).get("estimatedFreightRates", {}):
+            modo = data["response"]["estimatedFreightRates"]["mode"]
+            flete = {
+                "min": modo["price"]["min"]["moneyAmount"]["amount"],
+                "max": modo["price"]["max"]["moneyAmount"]["amount"],
+                "tiempoMin": modo["transitTimes"]["min"],
+                "tiempoMax": modo["transitTimes"]["max"]
+            }
+        elif data.get("response", {}).get("estimatedFreightRates"):
+            modo = data["response"]["estimatedFreightRates"][0]
+            flete = {
+                "min": modo["price"]["min"]["moneyAmount"]["amount"],
+                "max": modo["price"]["max"]["moneyAmount"]["amount"],
+                "tiempoMin": modo["transitTimes"]["min"],
+                "tiempoMax": modo["transitTimes"]["max"]
+            }
         else:
-            rate = data.get("response", {}).get("estimatedFreightRates", {}).get("mode", {})
+            return jsonify({"error": "No se encontraron tarifas"}), 404
 
-        resultado = {
-            "origen": origen,
-            "destino": destino,
-            "contenedor": contenedor,
-            "precio_min": rate.get("price", {}).get("min", {}).get("moneyAmount", {}).get("amount"),
-            "precio_max": rate.get("price", {}).get("max", {}).get("moneyAmount", {}).get("amount"),
-            "transit_min_dias": rate.get("transitTimes", {}).get("min"),
-            "transit_max_dias": rate.get("transitTimes", {}).get("max")
-        }
-        return jsonify(resultado)
+        return jsonify(flete)
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/", methods=["GET"])
-def index():
-    return jsonify({"mensaje": "Microservicio Freightos (sin API key) activo"})
+        logging.error(f"Error inesperado: {e}")
+        return jsonify({"error": f"Error inesperado: {str(e)}"}), 500
 
 if __name__ == "__main__":
-app.run(host="0.0.0.0", port=10000)
-
+    app.run(host="0.0.0.0", port=10000)
